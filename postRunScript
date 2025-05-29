@@ -1,0 +1,384 @@
+#MGEAR CHAIN_01 RIBBON BUILDER
+#Made by Thomas Dameris: dameristhomas@gmail.com; 310-422-9139
+
+#creates ribbon system on mGear's chain_01 component. IKFK switch, Twist, Squash and Stretch
+#must be 5 + segments
+#Use as post run script. 
+
+#if anyone would like to collaborate to turn this into an mGear component rather than a post run script
+#contact dameristhomas@gmail.com, 310-422-9139 w/ subject line "ribbon mGear component"
+
+import maya.cmds as cmds
+import mgear.rigbits
+import maya.api.OpenMaya as om
+from maya.api.OpenMaya import MEulerRotation, MVector
+import math
+
+#for working
+import importlib
+import tdTools.rigUtils
+importlib.reload(tdTools.rigUtils)
+
+from tdTools import rigUtils as utils
+utils.test_print()
+
+#DELETE ANY OLD COMPONENTS (FOR DEBUGGING)
+#children = cmds.listRelatives("custom", children=True, fullPath=True) or []
+#oldNodes = cmds.ls("Ribbon*") or []
+#cmds.delete(oldNodes, children)
+
+##################################  SET VARIABLES HERE  #########################################
+
+#TODO: create UI to set and then save script to be used as post run
+#TODO: connect to deform skel
+#TODO: match all groups to root of chain
+#TODO: orient deform handles with main nurbs plane
+
+def setVariables(ribbonName, uPatches, axis, scale, parentGroup, spread, spreadAxis, guideNameBase, host, fwd, flip, reverse):
+    
+ 
+    #ribbonName =w name of the ribbon (str)
+    #uPatches = number of patches on the nurbs plane. Equals joints in chain - 1.
+    #axis = axis that the nurbs plane is built on (lower case str)
+    #scale = scale of the nurbs plane
+    #parentGroup = group all of this will be kept under. I usually use "setup". (str)
+    #spread = distance the lofted curves will move apart from 0
+    #spreadAxis = the axis that the plane will loft across. (lower case str)
+    #guideNameBase = base name, by mgear default is "ComponentName_SideIndex". eg "chain_C0" (str)
+    #flip = direction of U and V on nurbs plane. True or False
+    #createDeformers = create a bend and sin deformer for ribbon
+    #host = mgear host
+    #fwd = direction chain is pointing 
+    #reverse = flip the ribbon over if it builds upside down. True or False
+
+    #validate strings
+    if not isinstance(ribbonName, str): 
+        print("ribbonName must be a string")
+    if not isinstance(axis, str):
+        print("axis must be a string")
+    if not isinstance(parentGroup, str):
+        print("parentGroup must be a string")
+    if not isinstance(spreadAxis, str):
+        print("spreadAxis must be a string")
+    if not isinstance(guideNameBase, str):
+        print("guideNameBase must be a string")
+    if not isinstance(host, str):
+        print("host must be a string")
+
+    print(f"Variable Names: ribbonName:{ribbonName}, uPatches:{uPatches}, axis:{axis}, scale:{scale}, parentGroup:{parentGroup}, spread:{spread}, spreadAxis:{spreadAxis}, guideNameBase:{guideNameBase}, host:{host}, ,flip:{flip}, reverse:{reverse}")
+    
+    return ribbonName, uPatches, axis, scale, parentGroup, spread, spreadAxis, guideNameBase, host, fwd, flip, reverse
+    
+ribbonName, uPatches, axis, scale, parentGroup, spread, spreadAxis, guideNameBase, host, fwd, flip, reverse = setVariables(
+   
+    "Ribbon1", #ribbonName
+    7, #patches
+    "x", #axis
+    45, #scale
+    "custom", #parentGroup
+    10, #spread
+    "x", #spreadAxis
+    "chain_C0", #guideBaseName
+    "", #host
+    "y", #fwd
+    True, #flip
+    True #reverse
+    ) 
+
+##############################  CREATE NURBS PLANE AT ORIGIN OR ALONG CURVE  ###################################
+
+def createNurbsPlane(ribbonName, uPatches, axis, scale, parentGroup, reverse, spread = None, spreadAxis = None, guideNameBase = None):
+    if guideNameBase:
+        
+        guideJnts = cmds.ls(f"{guideNameBase}_*_jnt")
+        numJnts = len(guideJnts)
+        deformers = []
+        cvPositions = []
+        cvRotations = []
+        
+        for i in range(numJnts):
+            locName = f"{guideNameBase}_{i}_jnt"
+            locPos = cmds.xform(locName, q=True, ws=True, t=True)
+            locRot = cmds.xform(locName, q=True, ws=True, ro=True)
+        
+            cvPositions.append(locPos)     #this stores each joint's world position
+            cvRotations.append(locRot)     
+        
+        
+        if spreadAxis in ("x","y","z"):
+            if spread == "x":
+                localOffset = MVector(spread, 0, 0)
+            elif spread == "y":
+                localOffset = MVector(0,spread, 0)
+            else:
+                localOffset = MVector(0, 0, spread)
+        leftCurvePoints = []    
+        rightCurvePoints = []   
+
+        for i, pos in enumerate(cvPositions):   
+            rot = cvRotations[i]                
+            rotEuler = MEulerRotation(          
+                math.radians(rot[0]),
+                math.radians(rot[1]),
+                math.radians(rot[2])
+            )
+
+            rotMatrix = rotEuler.asMatrix()    
+
+            #get in world space
+            worldOffset = localOffset * rotMatrix  #Rotates your offset vector to match joint's rotation
+
+            #offset left and right 
+            leftPt = [                           #left offset
+                pos[0] - worldOffset.x,
+                pos[1] - worldOffset.y,
+                pos[2] - worldOffset.z
+            ]
+            rightPt = [                          #right offset
+                pos[0] + worldOffset.x,
+                pos[1] + worldOffset.y,
+                pos[2] + worldOffset.z
+            ]
+
+            leftCurvePoints.append(leftPt)     
+            rightCurvePoints.append(rightPt)   
+        
+            print(f"Left Curve Points: {len(leftCurvePoints)}")
+            print(f"Right Curve Points: {len(rightCurvePoints)}")
+
+        #build the curve
+        leftCurve = cmds.curve(p= leftCurvePoints, d=3, name='leftCurve')
+        rightCurve = cmds.curve(p= rightCurvePoints, d=3, name='rightCurve')
+        
+        numSpans = len(leftCurvePoints) - 1
+        cmds.rebuildCurve(leftCurve, rpo=True, rt=0, spans=numSpans, d=3)
+        cmds.rebuildCurve(rightCurve, rpo=True, rt=0, spans=numSpans, d=3)
+       
+        #connect curves to build plane
+        ribbon = cmds.loft(
+            leftCurve, 
+            rightCurve, 
+            n = ribbonName,
+            u = True,
+            ar = reverse,
+            )[0]
+                    
+        ############## FOR DEBUGGING ###############
+        # Snap the first CVs together
+        #cmds.xform("leftCurve.cv[1]", ws=True, t=cmds.xform("leftCurve.cv[1]", q=True, ws=True, t=True))
+
+        # Snap the last CVs together
+        #cmds.xform("rightCurve.cv[7]", ws=True, t=cmds.xform("rightCurve.cv[7]", q=True, ws=True, t=True))
+        ############################################
+       
+        #delete lofted curves
+        cmds.delete(leftCurve,rightCurve)
+        
+        deformers.append(ribbon)
+        
+        print(f"created {ribbon} along {guideNameBase} positions")
+
+    else:
+        #create a nurbs plane at origin
+        if axis in ("x","y","z"):
+            if axis == "x":
+                nurbsAxis = (1,0,0)
+            elif axis == "y":
+                nurbsAxis = (0,1,0)
+            elif axis == "z":
+                nurbsAxis = (0,0,1)
+                
+        ribbon = cmds.nurbsPlane(
+            n = ribbonName, 
+            u = uPatches,
+            v = 1,
+            w = 2.5,
+            axis = nurbsAxis,
+            lr = .25,
+            d = 3
+            )
+        
+        cmds.scale(scale,scale,scale, ribbon)
+        
+        print(f"created {ribbon} at origin")
+        deformers.append(ribbon)
+        
+        
+    if not cmds.objExists("deformersGrp"):
+        deformersGrp = cmds.group(em = True, n = "deformersGrp")
+        utils.parentToGroup("deformersGrp", parentGroup)
+    
+    else:
+        deformersGrp = "deformersGrp"
+
+        
+    return deformers, ribbon, deformersGrp
+        
+deformers, ribbon, deformersGrp = createNurbsPlane(ribbonName, uPatches, axis, scale, parentGroup, reverse, spread, spreadAxis, guideNameBase) 
+
+############################################## CREATE RIBBON DEFORMERS ###########################################
+
+def createDeformers(ribbonName, deformers, ribbon, deformersGrp):
+
+    #duplicate planes to become deformers
+    sinDeformer = cmds.duplicate(ribbon, n = f"{ribbonName}_sinDeformer")[0]
+    bendDeformer = cmds.duplicate(ribbon, n = f"{ribbonName}_bendDeformer")[0]
+    cmds.setAttr(f"{bendDeformer}.visibility", 0)
+    cmds.setAttr(f"{sinDeformer}.visibility", 0)
+    
+    deformers.append(sinDeformer)
+    deformers.append(bendDeformer)
+    
+    #get positions of deformers
+    pos = cmds.xform(sinDeformer, q=True, ws=True, t=True)
+    rot = cmds.xform(sinDeformer, q=True, ws=True, ro=True)
+    
+    #make handles
+    sinDeformer, sinHandle = cmds.nonLinear(deformers[1], type = "sine", n = f"{ribbonName}_sin")
+    bendDeformer, bendHandle = cmds.nonLinear(deformers[2], type = "bend", n = f"{ribbonName}_bend")
+    deformers.append(sinHandle)
+    deformers.append(bendHandle)
+    
+
+    #put xforms of planes on deformer handle
+    cmds.xform(sinHandle, ws=True, t=pos)
+    cmds.xform(sinHandle, ws=True, ro=rot)
+    cmds.xform(sinHandle, ws=True, t=pos)
+    cmds.xform(sinHandle, ws=True, ro=rot)
+    
+
+    #organize
+    utils.parentToGroup(deformers, deformersGrp)
+    
+    
+createDeformers(ribbonName, deformers, ribbon, deformersGrp)
+
+####################################  CREATE FOLLICLES  #############################################
+
+def createFollicles(ribbonName, uPatches, axis, parentGroup, flip):        
+
+    #create hair follicles on nurbs surface
+    folliclesGroup = cmds.group(em=True, n=f"{ribbonName}_Follicles_Grp")
+    follicles = []
+    folliclePositions = []
+    uSpans = uPatches + 1
+    step = 1.0/(uSpans - 1)
+    bindJoints = []
+
+
+    for i in range(uSpans):
+        uvParam = i * step #this is the spacing between each follicle
+        
+        follicleShape = cmds.createNode('follicle', n=f"{ribbonName}Follicle_Shape_{i}")
+        follicleTransform = cmds.listRelatives(follicleShape, parent=True)
+        follicleTransform = cmds.rename(follicleTransform[0], f"{ribbonName}_Follicle_{i}")
+        
+        if flip == True:
+            cmds.setAttr(f"{follicleShape}.parameterU", .5)
+            cmds.setAttr(f"{follicleShape}.parameterV", uvParam)
+        else:
+            cmds.setAttr(f"{follicleShape}.parameterU", uvParam)
+            cmds.setAttr(f"{follicleShape}.parameterV", 0.5)
+       
+        cmds.setAttr(f"{follicleShape}.fixedSegmentLength", 1)
+        cmds.setAttr(f"{follicleShape}.segmentLength", 5)
+            
+        cmds.connectAttr(f"{ribbonName}.local", f"{follicleShape}.inputSurface")
+        cmds.connectAttr(f"{ribbonName}.worldMatrix[0]", f"{follicleShape}.inputWorldMatrix")
+        cmds.connectAttr(f"{follicleShape}.outTranslate", f"{follicleTransform}.translate")
+        cmds.connectAttr(f"{follicleShape}.outRotate", f"{follicleTransform}.rotate")
+        
+        follicles.append(follicleTransform)
+        cmds.parent(follicleTransform, folliclesGroup)
+
+        #create bind joints
+        cmds.select(clear=True)
+        jointName = f"{ribbonName}_BindJnt_{i}"
+        bindJoint = joint = cmds.joint(n=jointName)
+        
+        folliclePos = cmds.xform(follicleTransform, q = True, ws = True, t = True)
+        chainRot = cmds.xform(f"{guideNameBase}_{i}_jnt", q = True, ws = True, ro = True)
+        cmds.xform(joint, ws=True, t=folliclePos)
+        cmds.xform(joint, ws=True, ro=chainRot)
+        cmds.parent(joint, follicleTransform)
+        folliclePositions.append(folliclePos)
+        bindJointPos = cmds.xform(bindJoint, ws = True, t = folliclePos)
+        bindJointRot = cmds.xform(bindJoint, ws = True, ro = chainRot)
+        bindJoints.append(bindJoint)
+        
+        
+    print(f"{uSpans} follicles created on {ribbonName}")
+    print(f"{uSpans} bindJoints created and parented under {follicles}")
+    
+    #organize 
+    utils.parentToGroup(folliclesGroup, parentGroup)
+    
+    return folliclePositions, chainRot, bindJoints
+
+folliclePositions, chainRot, bindJoints = createFollicles(ribbonName, uPatches, axis, parentGroup, flip) 
+
+################################################## CREATE CONTROL JOINTS ##############################################
+def createControlJoints(bindJoints,parentGroup, ribbon, ribbonName):
+    controlJoints = []
+    offsetPositions = []
+    controlOffsets = []
+    controllers = []
+    controlAims = []
+    controlGroup = cmds.group(em = True, n = f"{ribbonName}_CtlJnts_Grp")  
+    jntCount = 0
+    #start with first joint in new group then joint at every other spline joint
+    for i, jnt in enumerate(bindJoints):
+        if i % 2 == 1:
+            jointName = f"{ribbonName}_CtlJnt{jntCount}"
+            jointOffsetName = f"{jointName}_offset"
+            jointAimName = f"{jointName}_aim"
+            controllerName = f"{ribbonName}_ctl{jntCount}"
+            offsetPosition = cmds.xform(bindJoints[i], q = True, ws = True, t= True)
+            controller = cmds.circle(n = controllerName, radius = 25, normal =(0,1,0))[0]
+            jointOffset = cmds.group(em = True, n = jointOffsetName)
+            jointAim = cmds.group (em = True, n = jointAimName)
+            cmds.xform(controller, ws=True, t = offsetPosition)
+            cmds.xform(jointOffset, ws = True, t = offsetPosition)
+            cmds.xform(jointAim, ws = True, t = offsetPosition)
+            joint = cmds.joint(n = jointName, rad = 10)
+            cmds.parent(jointAim, jointOffset)                
+            cmds.parent(jointOffset, controller)   
+            cmds.parent(controller,parentGroup)   
+            cmds.parent(controller, controlGroup)          
+            controlJoints.append(joint)
+            controlOffsets.append(jointOffset)
+            controlOffsets.append(jointAim)
+            controllers.append(controller)
+            offsetPositions.append(offsetPosition)
+            jntCount += 1
+            print(controlOffsets)
+            
+
+    cmds.skinCluster(controlJoints, ribbon, toSelectedBones=True, bindMethod=0, skinMethod=0, normalizeWeights=1) 
+                
+    utils.parentToGroup(controlGroup, parentGroup)
+    
+    
+createControlJoints(bindJoints,parentGroup, ribbon, ribbonName)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
