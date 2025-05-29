@@ -318,6 +318,7 @@ def createFollicles(ribbonName, uPatches, axis, parentGroup, flip):
 folliclePositions, chainRot, bindJoints = createFollicles(ribbonName, uPatches, axis, parentGroup, flip) 
 
 ################################################## CREATE CONTROL JOINTS ##############################################
+
 def createControlJoints(bindJoints,parentGroup, ribbon, ribbonName):
     controlJoints = []
     offsetPositions = []
