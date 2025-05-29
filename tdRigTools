@@ -1,0 +1,162 @@
+#TD TOOLS: HANDY RIGGING UTILITIES
+#all tools made by me, Thomas Dameris
+
+import maya.cmds as cmds
+import mgear.rigbits
+import maya.api.OpenMaya as om
+
+def test_print():
+    print("Import successful")
+
+################### PARENT TO GROUP TOOL ####################################
+
+#call this function to quickly parent one object or several to a group, new or existing
+#TODO: not creating new group
+
+def parentToGroup(objectNames = None, parentGroup = None):
+    
+    if not parentGroup:
+        print("no parent group given")
+        return
+ 
+    if not cmds.objExists(str(parentGroup)):
+        print(f"{parentGroup} doesnt exist, making it now")
+        newGroup = cmds.group(em = True, n = str((parentGroup)))
+  
+    if isinstance(objectNames, str):
+        objectNames = [objectNames]
+    
+    if isinstance(objectNames, str):
+        for objectName in objectNames:
+            cmds.parent(obj, parentGroup)
+            print(f"{objectNames} parented to {parentGroup}")
+            
+    else:
+        cmds.parent(objectNames, parentGroup)
+        print(f"{objectNames} parented to {parentGroup}")        
+    
+    return parentGroup
+    
+    pass
+    
+############################## GET FORWARD AXIS TOOL #########################
+
+#to find the foward axis, well use joints. if the two objects are not joints, well make temp ones at their transforms
+
+def getFwdAxis(obj1, obj2):
+    
+    temp_jnts = []
+    
+    if not all(cmds.objectType(obj, isType="joint") for obj in (obj1, obj2)):
+        
+        #make temp joints and match transforms
+        for obj in (obj1, obj2):
+            pos = cmds.xform(obj, q=True, ws=True, t=True)
+            rot = cmds.xform(obj, q=True, ws=True, ro=True)
+            jnt = cmds.joint(p=pos, name=f"temp_{obj}_jnt")
+            cmds.xform(jnt, ws = True, ro = rot)
+            temp_jnts.append(jnt)
+            
+        jnt1, jnt2 = temp_jnts
+        
+    else:
+        
+        jnt1, jnt2 = obj1, obj2
+        
+    #decompose matricies to get number values that we will subtract to get foward axis
+    mm_temp = cmds.createNode("multMatrix", n=f"{jnt1}_to_{jnt2}_mm_temp")
+    dcm_temp = cmds.createNode("decomposeMatrix", n=f"{jnt1}_to_{jnt2}_dcm_temp")
+    
+    cmds.connectAttr(f"{jnt1}.worldMatrix[0]", f"{mm_temp}.matrixIn[0]", f=True)
+    cmds.connectAttr(f"{jnt1}.worldInverseMatrix[0]", f"{mm_temp}.matrixIn[1]", f=True)
+
+    # Connect multMatrix output to decomposeMatrix input
+    cmds.connectAttr(f"{mm_temp}.matrixSum", f"{dcm_temp}.inputMatrix", f=True)
+
+    #get local tranlations of objects
+    tx = cmds.getAttr(f"{dcm_temp}.outputTranslateX")
+    ty = cmds.getAttr(f"{dcm_temp}.outputTranslateY")
+    tz = cmds.getAttr(f"{dcm_temp}.outputTranslateZ")
+
+    #get dominant axis
+    axis_values = {'X': abs(tx), 'Y': abs(ty), 'Z': abs(tz)}
+    forward_axis = max(axis_values, key=axis_values.get)
+
+    print(f"Forward axis from {obj1} to {obj2}: {forward_axis.upper()} ({tx:.3f}, {ty:.3f}, {tz:.3f})")
+    
+    #delete temp nodes
+    #cmds.delete([mm_temp, dcm_temp])
+    #print("temp nodes deleted")
+
+    return forward_axis
+    
+    pass
+    
+############################## MATRIX COSNTRAIN 2 TO 3 OBJECTS #########################
+
+def matrixConstrain(parentObjName, obj1,obj2,obj3 = None):
+        
+    objs = [obj1,obj2,obj3] 
+        
+    if obj3: #obj 3 position averaged between obj 1 and obj 2
+        
+        #create blend colors node
+        blendColors = cmds.createNode("blendColors", n=f"{parentObjName}_3inf_blendColors")
+        print(f"blendColors = {blendColors}")
+        
+        #Get first and end influences
+        inf1 = objs[0]
+        inf2 = objs[1]
+        
+        #make multmatrix and decomposeMatrix for first inf
+        mm1 = cmds.createNode("multMatrix", n=f"{inf1}_mm")
+        dc1 = cmds.createNode("decomposeMatrix", n=f"{inf1}_dcm")
+        cmds.connectAttr(f"{inf1}.worldMatrix[0]", f"{mm1}.matrixIn[0]")
+        cmds.connectAttr(f"{mm1}.matrixSum", f"{dc1}.inputMatrix")
+        
+        #make multmatrix and decomposeMatrix for second inf
+        mm2 = cmds.createNode("multMatrix", n=f"{inf2}_mm")
+        dc2 = cmds.createNode("decomposeMatrix", n=f"{inf2}_dcm")
+        cmds.connectAttr(f"{inf2}.worldMatrix[0]", f"{mm2}.matrixIn[0]")
+        cmds.connectAttr(f"{mm2}.matrixSum", f"{dc2}.inputMatrix")
+        
+        #connect to blend colors
+        cmds.connectAttr(f"{dc1}.outputTranslate", f"{blendColors}.color1")
+        cmds.connectAttr(f"{dc2}.outputTranslate", f"{blendColors}.color2")
+        
+        cmds.connectAttr(f"{blendColors}.output", f"{objs[2]}.translate")
+        
+        print(f"{objs[2]} is now matrix constrained to {inf1} and {inf2}")
+       
+    else: #not working yet
+
+        #Get both objs
+        parent = objs[0]
+        child = objs[1]
+        
+        #make multmatrix and decomposeMatrix 
+        mm = cmds.createNode("multMatrix", n = f"{child}_mm")
+        dc = cmds.createNode("decomposeMatrix", n = f"{child}_dcm")
+        
+        #get offset matrix
+        offset = cmds.getAttr(f"{child}.worldMatrix[0]")
+        
+        cmds.connectAttr(f"{parent}.worldMatrix[0]", f"{mm}.matrixIn[0]")
+
+        #connect parent world matrix to child multmatrix 0
+        cmds.connectAttr(f"{mm}.matrixIn[1]", type = "matrix",*offset)
+        
+        #connect 
+        cmds.connectAttr(f"{child}.parentInverseMatrix[0]", f"{mm}.matrixIn[2]")
+        
+        # Connect output to decomposeMatrix
+        cmds.connectAttr(f"{mm}.matrixSum", f"{dcm}.inputMatrix")
+
+        # Connect translate and rotate outputs to target
+        cmds.connectAttr(f"{dcm}.outputTranslate", f"{child}.translate")
+        cmds.connectAttr(f"{dcm}.outputRotate", f"{child}.rotate")
+        
+    pass
+        
+        
+       
